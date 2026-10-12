@@ -103,25 +103,37 @@ def _load_model_and_tokenizer(model_id: str, revision: str, device: str, dtype, 
         if not available:
             raise capability.CapabilityError(f"INT4 lane unavailable: {reason}")
         from torchao.quantization import Int4WeightOnlyConfig
-        quantization_config = Int4WeightOnlyConfig(group_size=128)
+        from torchao.quantization.quant_api import Int4PackingFormat
+        # torchao's default int4 packing format (PLAIN -> Int4Tensor) requires
+        # the internal "mslk" kernel package, which is not a public pip
+        # dependency and is unavailable in this environment. TILE_PACKED_TO_4D
+        # uses torch's native tinygemm ATen kernels instead, which ship with
+        # torch itself and need no extra package.
+        quantization_config = Int4WeightOnlyConfig(
+            group_size=128, int4_packing_format=Int4PackingFormat.TILE_PACKED_TO_4D
+        )
     elif quant == "nvfp4":
         available, reason = capability.gate_quant_lane(quant=quant, probe=probe)
         if not available:
             raise capability.CapabilityError(f"NVFP4 lane unavailable: {reason}")
         raise capability.CapabilityError(
-            "NVFP4 (E2M1) execution is capability-gated: the kernel path "
-            "requires Blackwell-class N1X hardware that was not available "
-            "to validate this implementation. The gate above confirms "
-            "whether the hardware supports it; the kernel wiring is "
-            "intentionally not claimed as executed without that validation."
+            "NVFP4 (E2M1) execution is not yet wired up: the hardware "
+            "capability gate above passed, but this benchmark does not "
+            "implement an NVFP4 quantization/execution path yet. The "
+            "kernel wiring is intentionally not claimed as executed "
+            "until it has been implemented and validated."
         )
 
     model = AutoModelForCausalLM.from_pretrained(model_id, **load_kwargs)
+    model.to(device)
     if quantization_config is not None:
+        # The tinygemm int4 packing kernel (aten::_convert_weight_to_int4pack)
+        # is CUDA-only, so weights must already be resident on the GPU before
+        # quantize_() runs; quantizing CPU-resident weights raises
+        # NotImplementedError for this backend.
         from torchao.quantization import quantize_
         quantize_(model, quantization_config)
 
-    model.to(device)
     model.eval()
 
     observed = _device_of(model)

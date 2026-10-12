@@ -39,7 +39,15 @@ TORCH_ARM64_SHA256_CP314 = "628b98e48595e1055942d697015ade14ea06d4a75a64720787e5
 TORCH_ARM64_WHEEL_NAME = "torch-2.14.0+cu134-cp314-cp314-win_arm64.whl"
 
 # -- Shared Windows package pins ----------------------------------------------
-TRANSFORMERS_VERSION = "5.19.0"
+# NOTE: design target was transformers==5.19.0, but the Microsoft-managed
+# package feed proxy (packagefeedproxy.microsoft.io, required by CISO Central
+# Feed Services policy -- direct public PyPI is blocked on managed devices)
+# had not mirrored 5.19.0 as of the last real hardware validation pass, and
+# tops out at 5.18.0 (confirmed via `pip index versions transformers` against
+# the proxy). 5.18.0 fully supports the Qwen3 architecture used by this
+# scenario, so it is used as the closest proxy-available substitute. Revisit
+# this pin once 5.19.0 is mirrored.
+TRANSFORMERS_VERSION = "5.18.0"
 TRITON_WINDOWS_VERSION = "3.8.0.post29"
 TORCHAO_VERSION = "0.18.0"
 

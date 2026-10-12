@@ -41,7 +41,7 @@ class ConfigPinTests(unittest.TestCase):
         self.assertEqual(self.config.TORCH_VERSION_X64, "2.14.0+cu134")
         self.assertEqual(self.config.TORCH_VERSION_ARM64, "2.14.0+cu134")
         self.assertEqual(self.config.TORCHVISION_VERSION_X64, "0.29.0+cu134")
-        self.assertEqual(self.config.TRANSFORMERS_VERSION, "5.19.0")
+        self.assertEqual(self.config.TRANSFORMERS_VERSION, "5.18.0")
         self.assertEqual(self.config.TRITON_WINDOWS_VERSION, "3.8.0.post29")
         self.assertEqual(self.config.TORCHAO_VERSION, "0.18.0")
 

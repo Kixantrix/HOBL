@@ -4,4 +4,4 @@
 --index-url https://packagefeedproxy.microsoft.io/pypi/simple
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.14.0
-transformers==5.19.0
+transformers==5.18.0

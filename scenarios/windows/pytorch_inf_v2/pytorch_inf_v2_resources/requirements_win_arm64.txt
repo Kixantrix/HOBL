@@ -11,6 +11,6 @@
 # TORCH_ARM64_SHA256_CP314 (mirroring the signed-installer verification
 # pattern used elsewhere in HOBL, e.g. the llvm scenario), and installs it
 # before installing the rest of this file.
-transformers==5.19.0
+transformers==5.18.0
 triton-windows==3.8.0.post29
 torchao==0.18.0

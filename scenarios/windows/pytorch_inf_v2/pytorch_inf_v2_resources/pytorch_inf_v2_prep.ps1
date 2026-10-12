@@ -91,11 +91,87 @@ if (-not (Get-Command pyenv -ErrorAction SilentlyContinue)) {
 # Force-reinstall (`-f`) wipes the pyenv version directory including any
 # packages another scenario installed into it. Per copilot-instructions.md,
 # always check first and only install when the version is genuinely missing.
+#
+# pyenv-win resolves installable versions from a bundled, periodically-synced
+# ".versions_cache.xml" snapshot rather than a true live python.org query.
+# That snapshot can lag behind brand-new CPython patch releases (observed:
+# cache dated well before the 3.14.8 release, capping definitions at
+# 3.14.5). `pyenv update` is supposed to refresh it, but on this locked-down
+# Arm64 build it fails outright (`htmlfile: This command is not supported` --
+# the VBScript updater depends on a legacy IE/WScript HTML COM object that is
+# blocked by this device's security policy). If the pinned version is
+# missing, fall back to installing the official python.org installer
+# directly into pyenv's versions directory using the same installer flags
+# pyenv-win itself uses, so `pyenv global`/`pyenv which` keep working
+# unmodified afterward.
+function Install-PyenvPythonWithFallback {
+    param([string]$version, [bool]$isArm)
+
+    "Installing Python $version via pyenv (this may take several minutes)..." | log
+    $pyenvOutput = (pyenv install $version 2>&1 | Out-String)
+    $pyenvOutput | Write-Host
+    if ($lastexitcode -eq 0) { return }
+
+    if ($pyenvOutput -notmatch "definition not found") {
+        check($lastexitcode)
+    }
+
+    " WARNING - pyenv-win's bundled version-definition cache does not include $version (likely stale relative to the upstream release). Attempting 'pyenv update' then retrying..." | log
+    pyenv update 2>&1 | Out-String | Write-Host
+    $installedAfterUpdate = (pyenv versions --bare 2>$null) -split "`n" | ForEach-Object { $_.Trim() }
+    if ($installedAfterUpdate -notcontains $version) {
+        pyenv install $version 2>&1 | Out-String | Write-Host
+    }
+    if ($lastexitcode -eq 0) { return }
+
+    " WARNING - 'pyenv update' did not make $version installable (update itself may be unsupported in this environment). Falling back to a direct python.org installer, placed into pyenv's versions directory so pyenv continues to resolve it normally." | log
+
+    $baseVersion = $version -replace "-arm$", ""
+    $archSuffix = if ($isArm) { "arm64" } else { "amd64" }
+    $installerName = "python-$baseVersion-$archSuffix.exe"
+    $installerUrl = "https://www.python.org/ftp/python/$baseVersion/$installerName"
+    $installerPath = Join-Path $env:TEMP $installerName
+    # Read from the registry directly (not $env:), since the pyenv-win installer
+    # sets these as persistent User variables that a freshly-spawned process may
+    # not yet have picked up without a shell/session restart.
+    $pyenvRoot = [System.Environment]::GetEnvironmentVariable("PYENV_ROOT", "User")
+    if (-not $pyenvRoot) { $pyenvRoot = [System.Environment]::GetEnvironmentVariable("PYENV", "User") }
+    if (-not $pyenvRoot) { $pyenvRoot = $env:PYENV_ROOT }
+    if (-not $pyenvRoot) { $pyenvRoot = $env:PYENV }
+    if (-not $pyenvRoot) { $pyenvRoot = "$env:USERPROFILE\.pyenv\pyenv-win" }
+    $targetDir = Join-Path (Join-Path $pyenvRoot "versions") $version
+
+    "Downloading official installer: $installerUrl" | log
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri $installerUrl -OutFile $installerPath
+    } catch {
+        " ERROR - Failed to download $installerUrl : $($_.Exception.Message)" | log
+        Exit 1
+    }
+
+    if (Test-Path $targetDir) { Remove-Item -Recurse -Force $targetDir }
+    "Installing Python $baseVersion directly into $targetDir ..." | log
+    $proc = Start-Process -FilePath $installerPath -ArgumentList "/quiet InstallAllUsers=0 Include_launcher=0 Include_test=0 SimpleInstall=1 TargetDir=`"$targetDir`"" -Wait -PassThru
+    if ($proc.ExitCode -ne 0 -or -not (Test-Path (Join-Path $targetDir "python.exe"))) {
+        " ERROR - Direct python.org installer failed (exit code $($proc.ExitCode)) or did not produce python.exe at $targetDir" | log
+        Exit 1
+    }
+    Remove-Item -Force $installerPath -ErrorAction SilentlyContinue
+
+    & (Join-Path $targetDir "python.exe") -E -s -m ensurepip -U --default-pip | Out-String | Write-Host
+    pyenv rehash
+
+    $installedVersionsRetry = (pyenv versions --bare 2>$null) -split "`n" | ForEach-Object { $_.Trim() }
+    if ($installedVersionsRetry -notcontains $version) {
+        " ERROR - Direct install placed Python at $targetDir but pyenv still does not list $version via 'pyenv versions'." | log
+        Exit 1
+    }
+    "Direct python.org fallback install succeeded; pyenv now recognizes $version." | log
+}
+
 $installedVersions = (pyenv versions --bare 2>$null) -split "`n" | ForEach-Object { $_.Trim() }
 if ($installedVersions -notcontains $pythonVersion) {
-    "Installing Python $pythonVersion via pyenv (this may take several minutes)..." | log
-    pyenv install $pythonVersion
-    check($lastexitcode)
+    Install-PyenvPythonWithFallback -version $pythonVersion -isArm $isARM64
 } else {
     "Python $pythonVersion already installed via pyenv -- preserving existing install" | log
 }
@@ -159,7 +235,13 @@ if ($isARM64) {
     # used elsewhere in HOBL, e.g. the llvm scenario).
     $configValues = & $venvPython -c "import config; print(config.TORCH_ARM64_INDEX_URL); print(config.TORCH_ARM64_WHEEL_NAME); print(config.TORCH_ARM64_SHA256_CP314)"
     $torchIndexUrl, $torchWheelName, $expectedSha256 = $configValues
-    $wheelUrl = "$torchIndexUrl$torchWheelName"
+    # The '+' in the local-version segment (e.g. "+cu134") must be percent-encoded
+    # as %2B in the URL path -- NVIDIA's index serves the literal '+' as 404 Not
+    # Found (confirmed against https://pypi.nvidia.com/nvtorch_oot/torch/, whose
+    # own index hrefs use %2B). pip/standard package indices handle this
+    # transparently; a raw Invoke-WebRequest does not, so encode explicitly.
+    $torchWheelNameEncoded = $torchWheelName -replace '\+', '%2B'
+    $wheelUrl = "$torchIndexUrl$torchWheelNameEncoded"
     $wheelPath = Join-Path $env:TEMP $torchWheelName
     "Downloading Arm64 NVIDIA torch wheel from $wheelUrl" | log
     try {

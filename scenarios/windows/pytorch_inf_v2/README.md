@@ -53,10 +53,15 @@ on real N1X / Apple Silicon hardware.
   `https://pypi.nvidia.com/nvtorch_oot/torch/` -- **downloaded explicitly and
   SHA256-verified** against the pin in `config.py` before install (prep fails
   fast on any hash mismatch; this is not a standard PyPI/pytorch.org mirror).
-- `transformers==5.19.0`, `triton-windows==3.8.0.post29`, `torchao==0.18.0`
+- `transformers==5.18.0`, `triton-windows==3.8.0.post29`, `torchao==0.18.0`
   (INT4/NVFP4 are additionally gated by a runtime capability probe --
   `capability.gate_quant_lane()` -- before being used, regardless of whether
-  the packages import successfully).
+  the packages import successfully). `transformers` targets 5.19.0 by design,
+  but the Microsoft-managed package feed proxy (required on managed devices
+  under CISO Central Feed Services policy; direct public PyPI is blocked)
+  had not mirrored 5.19.0 as of the last hardware validation pass and tops
+  out at 5.18.0, which fully supports the Qwen3 architecture used here.
+  Revisit this pin once 5.19.0 is mirrored.
 - Both model tiers (portable + quantized) are downloaded during prep, outside
   of any scored time.
 
